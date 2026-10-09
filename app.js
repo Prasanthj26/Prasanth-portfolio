@@ -91,6 +91,8 @@ const projects = [
     description:
       "A public developer project exploring the Java Servlet lifecycle, request-response lifecycles, doGet/doPost dispatching, and session tracking through an accessible interactive interface.",
     tech: ["Java", "Servlets", "Tomcat", "Web"],
+    live: "https://prasanthj26.github.io/JavaServlet-Interactive-Explorer/",
+    liveLabel: "Live Demo",
     code: "https://github.com/Prasanthj26/JavaServlet-Interactive-Explorer",
   },
 ];
@@ -948,7 +950,7 @@ function Projects() {
                 el(
                   "a",
                   { className: "btn-agency-primary-sm", href: proj.live, target: "_blank", rel: "noreferrer" },
-                  "Live Simulation"
+                  proj.liveLabel || "Live Simulation"
                 ),
               proj.code &&
                 el(
