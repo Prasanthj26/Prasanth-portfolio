@@ -187,6 +187,12 @@ function Icon({ name, className = "" }) {
         { className: `agency-icon ${className}`, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
         el("path", { d: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" })
       );
+    case "shield":
+      return el(
+        "svg",
+        { className: `agency-icon ${className}`, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+        el("path", { d: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" })
+      );
     default:
       return null;
   }
@@ -234,6 +240,63 @@ function App() {
   const [copyLabel, setCopyLabel] = React.useState("Copy email");
   const [formStatus, setFormStatus] = React.useState("");
   const [formErrors, setFormErrors] = React.useState({});
+
+  // Owner state management (UI visibility gate)
+  // Public visitors will default to false, hiding the update photo button completely.
+  const [isOwner, setIsOwner] = React.useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("owner") === "true" || params.get("admin") === "true") {
+        sessionStorage.setItem("portfolio_owner_mode", "true");
+        return true;
+      }
+      if (params.get("owner") === "false" || params.get("admin") === "false") {
+        sessionStorage.removeItem("portfolio_owner_mode");
+        return false;
+      }
+      return sessionStorage.getItem("portfolio_owner_mode") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const [ownerNotice, setOwnerNotice] = React.useState(null);
+  const [toastMessage, setToastMessage] = React.useState("");
+
+  const showToast = (message) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage((current) => (current === message ? "" : current));
+    }, 3500);
+  };
+
+  const toggleOwnerMode = () => {
+    setIsOwner((prev) => {
+      const next = !prev;
+      try {
+        if (next) {
+          sessionStorage.setItem("portfolio_owner_mode", "true");
+          showToast("Owner Mode: Active ('Update Photo' is visible)");
+        } else {
+          sessionStorage.removeItem("portfolio_owner_mode");
+          showToast("Owner Mode: Inactive ('Update Photo' is hidden)");
+        }
+      } catch {}
+      return next;
+    });
+  };
+
+  // Keyboard shortcut listener: Ctrl + Shift + U (or Cmd + Shift + U) toggles owner mode
+  React.useEffect(() => {
+    const handleKeyDown = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === "U" || event.key === "u")) {
+        event.preventDefault();
+        toggleOwnerMode();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   // Active navigation tracking
   React.useEffect(() => {
@@ -312,24 +375,59 @@ function App() {
   const uploadPhoto = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setUploadStatus("Saving...");
+
+    setUploadStatus("Processing...");
     setUploadState("saving");
+
     try {
       const imageBlob = await enhanceImage(file);
+      const previewUrl = URL.createObjectURL(imageBlob);
+
+      const isLocal =
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1";
+
+      if (!isLocal) {
+        // Hosted on GitHub Pages: show session preview and display deployment guidance
+        setProfileSrc(previewUrl);
+        setUploadStatus("Preview active");
+        setUploadState("success");
+
+        setOwnerNotice({
+          open: true,
+          previewUrl: previewUrl,
+        });
+
+        setTimeout(() => {
+          setUploadStatus("Update photo");
+          setUploadState("idle");
+        }, 3000);
+        return;
+      }
+
+      // Local development server environment (server.js)
+      setUploadStatus("Saving to disk...");
       const response = await fetch("/upload-photo", {
         method: "POST",
         headers: { "Content-Type": "image/jpeg" },
         body: imageBlob,
       });
-      if (!response.ok) throw new Error("Upload failed");
-      setProfileSrc(`${uploadedPhoto}?v=${Date.now()}`);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || "Upload failed");
+      }
+
+      setProfileSrc(`${portraitSrc}?v=${Date.now()}`);
       setUploadStatus("Photo saved");
       setUploadState("success");
+      showToast("Photo saved to assets! Commit and push to update GitHub Pages.");
       setTimeout(() => {
         setUploadStatus("Update photo");
         setUploadState("idle");
       }, 2500);
     } catch (error) {
+      console.error("Photo upload error:", error);
       setUploadStatus("Upload failed");
       setUploadState("error");
       setTimeout(() => {
@@ -390,7 +488,7 @@ function App() {
     el(
       "main",
       { id: "main" },
-      el(Hero, { profileSrc, uploadPhoto, uploadStatus, uploadState }),
+      el(Hero, { profileSrc, uploadPhoto, uploadStatus, uploadState, isOwner, toggleOwnerMode }),
       el(FocusSection),
       el(About),
       el(Skills, { skillFilter, setSkillFilter, visibleSkills }),
@@ -398,7 +496,9 @@ function App() {
       el(Experience),
       el(Contact, { copyEmail, copyLabel, submitForm, formStatus, formErrors })
     ),
-    el(Footer)
+    el(Footer, { toggleOwnerMode }),
+    toastMessage && el("div", { className: "portfolio-toast", role: "status" }, toastMessage),
+    ownerNotice && el(OwnerNoticeModal, { notice: ownerNotice, onClose: () => setOwnerNotice(null) })
   );
 }
 
@@ -470,7 +570,7 @@ function Header({ menuOpen, setMenuOpen, active }) {
 }
 
 // 1 & 3. Photographic Hero Section & Hero Content
-function Hero({ profileSrc, uploadPhoto, uploadStatus, uploadState }) {
+function Hero({ profileSrc, uploadPhoto, uploadStatus, uploadState, isOwner, toggleOwnerMode }) {
   return el(
     "section",
     { className: "agency-hero", id: "home" },
@@ -491,13 +591,29 @@ function Hero({ profileSrc, uploadPhoto, uploadStatus, uploadState }) {
           height: "1600",
           loading: "eager",
         }),
-        // Discreet photo upload trigger
-        el(
-          "label",
-          { className: `hero-upload-badge ${uploadState}` },
-          el("input", { type: "file", accept: "image/*", onChange: uploadPhoto }),
-          el("span", null, uploadStatus)
-        )
+        // Discreet photo upload trigger - rendered strictly for the owner
+        isOwner
+          ? el(
+              "div",
+              { className: "hero-owner-controls" },
+              el(
+                "label",
+                { className: `hero-upload-badge ${uploadState}` },
+                el("input", { type: "file", accept: "image/*", onChange: uploadPhoto }),
+                el("span", null, uploadStatus)
+              ),
+              el(
+                "button",
+                {
+                  type: "button",
+                  className: "hero-owner-exit-badge",
+                  onClick: toggleOwnerMode,
+                  title: "Exit Owner Mode (Hide update button)",
+                },
+                "✕ Exit Owner Mode"
+              )
+            )
+          : null
       ),
       // Introduction and CTA on the RIGHT side
       el(
@@ -1000,7 +1116,7 @@ function Contact({ copyEmail, copyLabel, submitForm, formStatus, formErrors }) {
 }
 
 // 5. Minimal Redesigned Footer
-function Footer() {
+function Footer({ toggleOwnerMode }) {
   return el(
     "footer",
     { className: "agency-footer" },
@@ -1015,13 +1131,97 @@ function Footer() {
       ),
       el(
         "p",
-        { className: "footer-copyright" },
+        {
+          className: "footer-copyright",
+          onDoubleClick: toggleOwnerMode,
+          title: "Double-click to toggle owner mode",
+        },
         `© ${new Date().getFullYear()} Prasanth J. All rights reserved.`
       ),
       el(
         "div",
         { className: "footer-links" },
         el("a", { href: "#home" }, "Back to top ↑")
+      )
+    )
+  );
+}
+
+// Owner Guidance Dialog for Static Hosting (GitHub Pages)
+function OwnerNoticeModal({ notice, onClose }) {
+  if (!notice || !notice.open) return null;
+
+  const downloadImage = () => {
+    if (!notice.previewUrl) return;
+    const anchor = document.createElement("a");
+    anchor.href = notice.previewUrl;
+    anchor.download = "prasanth-portrait.jpg";
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  };
+
+  return el(
+    "div",
+    { className: "owner-dialog-overlay", onClick: onClose },
+    el(
+      "div",
+      { className: "owner-dialog", onClick: (event) => event.stopPropagation() },
+      el(
+        "div",
+        { className: "owner-dialog-header" },
+        el(
+          "h3",
+          { className: "owner-dialog-title" },
+          el(Icon, { name: "shield" }),
+          "GitHub Pages Static Hosting Notice"
+        )
+      ),
+      el(
+        "div",
+        { className: "owner-dialog-body" },
+        el(
+          "p",
+          null,
+          "Your selected photo has been enhanced and is now previewed live in this browser session. However, because this portfolio is hosted on ",
+          el("strong", null, "GitHub Pages"),
+          ", client-side requests cannot write files directly to the server or Git repository."
+        ),
+        el(
+          "div",
+          { className: "owner-dialog-steps" },
+          el("p", { className: "steps-heading" }, "To publish this photo permanently to all visitors:"),
+          el(
+            "ol",
+            null,
+            el("li", null, "Click the button below to download the processed portrait."),
+            el("li", null, "Replace the existing file at ", el("code", null, "assets/prasanth-portrait.jpg"), " in your portfolio repository."),
+            el(
+              "li",
+              null,
+              "Deploy securely via Git: ",
+              el("code", null, "git commit -am 'Update portrait' && git push origin main")
+            )
+          )
+        ),
+        el(
+          "p",
+          { className: "security-note" },
+          "🔒 ",
+          el("strong", null, "Security Architecture: "),
+          "Static hosting has no backend execution. Upload security is provided by your GitHub account's SSH keys and 2FA during Git push, preventing any external visitor from tampering with your site."
+        )
+      ),
+      el(
+        "div",
+        { className: "owner-dialog-actions" },
+        notice.previewUrl &&
+          el(
+            "button",
+            { className: "btn-agency-primary", onClick: downloadImage },
+            "DOWNLOAD PROCESSED PHOTO"
+          ),
+        el("button", { className: "btn-agency-secondary", onClick: onClose }, "CLOSE PREVIEW")
       )
     )
   );
